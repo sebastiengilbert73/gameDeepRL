@@ -47,3 +47,4 @@ class RandomSimulator(Simulator):
         chosen_move[legal_moves_coords[chosen_move_ndx, 0], legal_moves_coords[chosen_move_ndx, 1],
             legal_moves_coords[chosen_move_ndx, 2], legal_moves_coords[chosen_move_ndx, 3]] = 1
         return chosen_move
+    
