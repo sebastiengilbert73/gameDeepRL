@@ -41,6 +41,14 @@ class Authority(rules.authority.GameAuthority):
                     legalMovesMask[0, 0, row, column] = 0
         return legalMovesMask
 
+    def LegalMoveCoordinates(self, positionArr, player):
+        coordinatesList = []
+        for row in range(3):
+            for column in range(3):
+                if positionArr[0, 0, row, column] == 0 and positionArr[1, 0, row, column] == 0:
+                    coordinatesList.append([0, 0, row, column])
+        return coordinatesList
+
     def PositionArrayShape(self):
         return self.positionArrayShape
 
@@ -161,3 +169,20 @@ class Authority(rules.authority.GameAuthority):
         if numberOfOnes != 1:
             raise ValueError("Authority.DropCoordinates(): The number of ones in moveArr ({}) is not one".format(numberOfOnes))
         return dropCoordinates
+
+    def MoveWithMoveArrayCoordinates(self, current_position, player, move_array_coordinates):
+        if current_position[move_array_coordinates[0],
+                            move_array_coordinates[1],
+                            move_array_coordinates[2],
+                            move_array_coordinates[3] ] != 0 :
+            raise ValueError("Authority.MoveWithMoveArrayCoordinates(): Attempt to drop in an occupied square ({})".format(move_array_coordinates))
+        new_position_arr = current_position.copy()
+        new_position_arr[
+            self.playerToPlaneIndexDic[player],
+            0,
+            move_array_coordinates[2],
+            move_array_coordinates[3] ] = 1
+
+        winner = self.Winner(new_position_arr, player)
+        return new_position_arr, winner
+

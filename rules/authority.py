@@ -12,11 +12,19 @@ class GameAuthority(abc.ABC):
         pass # return (positionArr, winner)
 
     @abc.abstractmethod
+    def MoveWithMoveArrayCoordinates(self, current_position, player, move_array_coordinates):
+        pass
+
+    @abc.abstractmethod
     def Winner(self, positionArr, lastPlayerWhoPlayed):
         pass
 
     @abc.abstractmethod
     def LegalMovesMask(self, positionArr, player):
+        pass
+
+    @abc.abstractmethod
+    def LegalMoveCoordinates(self, positionArr, player): # List of 4-element lists
         pass
 
     @abc.abstractmethod
