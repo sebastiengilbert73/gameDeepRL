@@ -65,6 +65,34 @@ class Simulator(abc.ABC):
                 legal_move_to_statistics_list.append((move_coordinates, (number_of_wins, number_of_draws, number_of_losses)))
         return legal_move_to_statistics_list
 
+    def SimulateAsymmetricGame(self, authority, other_player_simulator,
+                              maximum_number_of_moves, starting_position=None,
+                              starting_player=None):
+        if starting_position is None:
+            starting_position = authority.InitialPosition()
+        if starting_player is None:
+            players = authority.PlayersList()
+            starting_player = players[0]
+
+        winner = None
+        number_of_moves = 0
+        position = starting_position
+        current_player = starting_player
+        positionsList = [position]
+        while winner is None and number_of_moves < maximum_number_of_moves:
+            move_coordinates = None
+            if current_player == starting_player:
+                move_coordinates = self.ChooseMoveCoordinates(authority, position, current_player)
+            else:
+                move_coordinates = other_player_simulator.ChooseMoveCoordinates(authority, position, current_player)
+            position, winner = authority.MoveWithMoveArrayCoordinates(position, current_player, move_coordinates)
+            number_of_moves += 1
+            positionsList.append(position)
+            current_player = authority.OtherPlayer(current_player)
+        return positionsList, winner
+
+
+
 
 class RandomSimulator(Simulator):
     def __init__(self):
