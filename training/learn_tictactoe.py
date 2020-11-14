@@ -5,21 +5,36 @@ from torch.utils.data import Dataset, DataLoader
 import rules.tictactoe
 import simulation.simulator
 import random
+import architectures.tictactoe as arch
+import os
+import copy
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--disable-cuda', action='store_true', help='Disable CUDA')
-parser.add_argument('--learningRate', help='The learning rate. Default: 0.001', type=float, default=0.001)
-parser.add_argument('--numberOfEpochs', help='Number of epochs. Default: 1000', type=int, default=1000)
+parser.add_argument('--useCpu', help='Use cpu, even if cuda is available', action='store_true')
+parser.add_argument('--conv1NumberOfChannels', help="The number of channels for the 1st convolution. Default: 16", type=int, default=16)
+parser.add_argument('--conv2NumberOfChannels', help="The number of channels for the 2nd convolution. Default: 32", type=int, default=32)
+parser.add_argument('--hiddenSize', help="The size of the hidden layer. Default: 64", type=int, default=64)
+parser.add_argument('--dropoutRatio', help="The dropout ratio. Default: 0.5", type=float, default=0.5)
+parser.add_argument('--learningRate', help='The learning rate. Default: 0.0001', type=float, default=0.0001)
+parser.add_argument('--weightDecay', help="The weight decay. Default: 0.0001", type=float, default=0.0001)
+parser.add_argument('--numberOfEpochs', help='Number of epochs. Default: 200', type=int, default=200)
+parser.add_argument('--numberOfTrainingPositions', help="The number of positions for training. Default: 1000", type=int, default=1000)
+parser.add_argument('--numberOfValidationPositions', help="The number of positions for validation. Default: 250", type=int, default=250)
+parser.add_argument('--numberOfSimulations', help="The number of simulations per position. Default: 100", type=int, default=100)
 parser.add_argument('--minibatchSize', help='The minibatch size. Default: 16', type=int, default=16)
 parser.add_argument('--outputDirectory', help="The directory where the output data will be written. Default: './'", default='./')
 args = parser.parse_args()
-args.cuda = not args.disable_cuda and torch.cuda.is_available()
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(message)s')
 
+device = 'cpu'
+useCuda = not args.useCpu and torch.cuda.is_available()
+if useCuda:
+    device = 'cuda'
+
 class PositionStats(Dataset):
     def __init__(self, player_simulator, opponent_simulator, number_of_positions,
-                 start_simulation_at_index=-3, maximum_number_of_moves=9, number_of_simulations=100):
+                 maximum_number_of_moves=9, number_of_simulations=100):
         super().__init__()
         self.player_simulator = player_simulator
         self.opponent_simulator = opponent_simulator
@@ -31,12 +46,6 @@ class PositionStats(Dataset):
             positionsList, winner = self.player_simulator.SimulateAsymmetricGame(
                 self.authority, self.opponent_simulator, self.maximum_number_of_moves)
             # Select a position from the list
-            """startNdx = start_simulation_at_index
-            if len(positionsList) < -startNdx:
-                startNdx = 0
-            if startNdx < 0:
-                startNdx += len(positionsList)
-            """
             startNdx = random.randint(0, len(positionsList) - 2)
 
             positionsList = positionsList[: startNdx + 1]
@@ -66,20 +75,116 @@ class PositionStats(Dataset):
 
     def __getitem__(self, idx):
         position, stats = self.position_stats_pairs[idx]
-        return (torch.tensor(position), torch.tensor([stats[0], stats[1], stats[2]]))
+        return (torch.tensor(position, dtype=torch.float), torch.tensor([stats[0], stats[1], stats[2]]))
 
 
 def main():
     logging.info("learn_tictactoe.py main()")
     authority = rules.tictactoe.Authority()
-    player_simulator = simulation.simulator.RandomSimulator()
+
     opponent_simulator = simulation.simulator.RandomSimulator()
-    position_stats = PositionStats(player_simulator, opponent_simulator, number_of_positions=10,
-                                   start_simulation_at_index=0, maximum_number_of_moves=9,
-                                   number_of_simulations=100)
-    for index in range(position_stats.__len__()):
-        (position, stats) = position_stats[index]
-        print("{}: {}".format(position, stats))
+    player_simulator = simulation.simulator.RandomSimulator()
+
+    # Create a neural network
+    neural_net = arch.ConvPredictor(
+        conv1_number_of_channels=args.conv1NumberOfChannels,
+        conv2_number_of_channels=args.conv2NumberOfChannels,
+        hidden_size=args.hiddenSize,
+        dropout_ratio=args.dropoutRatio,
+        soft_max_temperature=0.0
+    ).to(device)
+
+    logging.info("Creating training and validation dataset...")
+    training_dataset = PositionStats(
+        player_simulator=player_simulator,
+        opponent_simulator=opponent_simulator,
+        number_of_positions=args.numberOfTrainingPositions,
+        maximum_number_of_moves=9,
+        number_of_simulations=args.numberOfSimulations
+    )
+    logging.info("Finished creating training dataset")
+    validation_dataset = PositionStats(
+        player_simulator=player_simulator,
+        opponent_simulator=opponent_simulator,
+        number_of_positions=args.numberOfTrainingPositions,
+        maximum_number_of_moves=9,
+        number_of_simulations=args.numberOfSimulations
+    )
+    logging.info("Finished creating validation dataset")
+
+    # Create the data loaders
+    training_loader = torch.utils.data.DataLoader(training_dataset, batch_size=args.minibatchSize,
+                                                 shuffle=True, num_workers=2)
+    validation_loader = torch.utils.data.DataLoader(validation_dataset, batch_size=args.minibatchSize,
+                                                  shuffle=True, num_workers=2)
+
+    # Create the optimizer
+    optimizer = torch.optim.Adam(neural_net.parameters(), lr=args.learningRate, betas=(0.5, 0.999),
+                                 weight_decay=args.weightDecay)
+
+    # Loss function
+    lossFcn = torch.nn.MSELoss()
+
+    # Output monitoring file
+    epochLossFile = open(os.path.join(args.outputDirectory, 'epochLoss.csv'), "w",
+                         buffering=1)  # Flush the buffer at each line
+    epochLossFile.write("epoch,trainingLoss,validationLoss\n")
+
+    for superepoch in range(1, 10):
+        logging.info ("****** Superepoch {} ******".format(superepoch))
+        for epoch in range(1, args.numberOfEpochs + 1):
+            #print ("epoch {}".format(epoch))
+            # Set the neural network to training mode
+            neural_net.train()
+            loss_sum = 0
+            for starting_position_tsr, training_target_stats_tsr in training_loader:
+                print('.', end='', flush=True)
+                starting_position_tsr, training_target_stats_tsr = starting_position_tsr.to(device), training_target_stats_tsr.to(device)
+                optimizer.zero_grad()
+                prediction_tsr = neural_net(starting_position_tsr)
+
+                loss = lossFcn(prediction_tsr, training_target_stats_tsr)
+                loss.backward()
+                optimizer.step()
+                loss_sum += loss.item()
+            training_loss = loss_sum/training_dataset.__len__()
+            print('\n')
+
+            # Validation
+            with torch.no_grad():
+                neural_net.eval()
+                validation_loss_sum = 0
+                for starting_position_tsr, validation_target_stats_tsr in validation_loader:
+                    starting_position_tsr, validation_target_stats_tsr = starting_position_tsr.to(device), validation_target_stats_tsr.to(device)
+                    prediction_tsr = neural_net(starting_position_tsr)
+                    loss = lossFcn(prediction_tsr, validation_target_stats_tsr)
+                    validation_loss_sum += loss.item()
+                validation_loss = validation_loss_sum/validation_dataset.__len__()
+            logging.info("Epoch {}:\ttraining_loss = {}\t\tvalidation_loss = {}".format(epoch, training_loss, validation_loss))
+
+        # Recompute the datasets
+        player_simulator = copy.deepcopy(neural_net)
+        player_simulator.SetSoftmaxTemperature(1.0)
+        opponent_simulator = simulation.simulator.RandomSimulator()  # Could be another copy of neural_net, with a different softmax temperature
+        logging.info("Creating training and validation dataset...")
+        training_dataset = PositionStats(
+            player_simulator=player_simulator,
+            opponent_simulator=opponent_simulator,
+            number_of_positions=args.numberOfTrainingPositions,
+            maximum_number_of_moves=9,
+            number_of_simulations=args.numberOfSimulations
+        )
+        logging.info("Finished creating training dataset")
+        validation_dataset = PositionStats(
+            player_simulator=player_simulator,
+            opponent_simulator=opponent_simulator,
+            number_of_positions=args.numberOfTrainingPositions,
+            maximum_number_of_moves=9,
+            number_of_simulations=args.numberOfSimulations
+        )
+        logging.info("Finished creating validation dataset")
+
+
 
 if __name__ == '__main__':
     main()
