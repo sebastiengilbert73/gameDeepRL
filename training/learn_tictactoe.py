@@ -171,6 +171,7 @@ def main():
         print("")
         # Play against a random player
         logging.info("Playing against a random player...")
+        neural_net.SetSoftmaxTemperature(1.0)
         games_list, number_of_wins, number_of_draws, number_of_losses = PlayAgainstRandomPlayer(
             neural_net, 20, authority
         )
@@ -179,10 +180,10 @@ def main():
 
         # Recompute the datasets
         player_simulator = copy.deepcopy(neural_net)
-        player_simulator.SetSoftmaxTemperature(1.0)
+        player_simulator.SetSoftmaxTemperature(2.0)
         #opponent_simulator = simulation.simulator.RandomSimulator()  # Could be another copy of neural_net, with a different softmax temperature
         opponent_simulator = copy.deepcopy(neural_net)
-        opponent_simulator.SetSoftmaxTemperature(2.0)
+        opponent_simulator.SetSoftmaxTemperature(1.0)
         logging.info("Creating training and validation datasets...")
         training_dataset = PositionStats(
             player_simulator=player_simulator,
@@ -205,7 +206,7 @@ def main():
         validation_loader = torch.utils.data.DataLoader(validation_dataset, batch_size=args.minibatchSize,
                                                         shuffle=True, num_workers=2)
 
-        model_filepath = args.modelFilepathPrefix + str(args.conv1NumberOfChannels) + '_' + str(args.conv2NumberOfChannels) + '_' + str(args.hiddenSize) + '_' + args.dropoutRatio + '_' + str(superepoch) + '.pth'
+        model_filepath = args.modelFilepathPrefix + str(args.conv1NumberOfChannels) + '_' + str(args.conv2NumberOfChannels) + '_' + str(args.hiddenSize) + '_' + str(args.dropoutRatio) + '_' + str(superepoch) + '.pth'
         torch.save(neural_net.state_dict(), model_filepath)
 
 
