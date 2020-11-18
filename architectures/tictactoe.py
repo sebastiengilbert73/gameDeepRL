@@ -5,6 +5,35 @@ import math
 import random
 
 
+class AuxiliaryRegressorConv(torch.nn.Module):
+    def __init__(self, input_size_CDHW, output_size, dropout_ratio):
+        super(AuxiliaryRegressorConv, self).__init__()
+        self.number_of_inputs = input_size_CDHW[0] * input_size_CDHW[1] * input_size_CDHW[2] * input_size_CDHW[3]
+        self.dropout = torch.nn.Dropout(p=dropout_ratio)
+        self.linear = torch.nn.Linear(self.number_of_inputs, output_size)
+
+    def forward(self, x):
+        # x.shape = (N, C, D, H, W)
+        activation = x.view(-1, self.number_of_inputs)
+        activation = self.dropout(activation)
+        outputTsr = torch.clip(self.linear(activation), 0, 1)  # outputTsr.shape = (N, output_size)
+        outputTsr = torch.nn.functional.normalize(outputTsr, p=1, dim=1)
+        return outputTsr
+
+class AuxiliaryRegressorLinear(torch.nn.Module):
+    def __init__(self, input_size, output_size, dropout_ratio):
+        super(AuxiliaryRegressorLinear, self).__init__()
+        self.number_of_inputs = input_size
+        self.dropout = torch.nn.Dropout(p=dropout_ratio)
+        self.linear = torch.nn.Linear(self.number_of_inputs, output_size)
+
+    def forward(self, x):
+        # x.shape = (N, self.number_of_inputs)
+        activation = self.dropout(x)
+        outputTsr = torch.clip(self.linear(activation), 0, 1)  # outputTsr.shape = (N, output_size)
+        outputTsr = torch.nn.functional.normalize(outputTsr, p=1, dim=1)
+        return outputTsr
+
 class ConvPredictor(torch.nn.Module, simulation.simulator.Simulator):
     def __init__(self, conv1_number_of_channels, conv2_number_of_channels,
                  hidden_size, dropout_ratio=0.5, soft_max_temperature=0.0):
@@ -13,9 +42,16 @@ class ConvPredictor(torch.nn.Module, simulation.simulator.Simulator):
         self.conv2 = torch.nn.Conv3d(conv1_number_of_channels, conv2_number_of_channels, (1, 2, 2))
         self.dropout3d = torch.nn.Dropout3d(p=dropout_ratio)
         self.fc1 = torch.nn.Linear(conv2_number_of_channels, hidden_size)
-        self.fc2 = torch.nn.Linear(hidden_size, 3)
+        #self.fc2 = torch.nn.Linear(hidden_size, 3)
         self.dropout = torch.nn.Dropout(p=dropout_ratio)
+        self.conv1_number_of_channels = conv1_number_of_channels
         self.conv2_number_of_channels = conv2_number_of_channels
+        self.hidden_size = hidden_size
+
+        self.pred1 = AuxiliaryRegressorConv((self.conv1_number_of_channels, 1, 2, 2), 3, dropout_ratio)
+        self.pred2 = AuxiliaryRegressorLinear(self.conv2_number_of_channels, 3, dropout_ratio)
+        self.pred3 = AuxiliaryRegressorLinear(self.hidden_size, 3, dropout_ratio)
+
         self.soft_max_temperature = soft_max_temperature
 
     def forward(self, x):
@@ -26,18 +62,27 @@ class ConvPredictor(torch.nn.Module, simulation.simulator.Simulator):
         activation2 = torch.nn.functional.relu(self.conv2(activation1))
         # activation2.shape = (N, c2, 1, 1, 1)
         activation2 = activation2.view(-1, self.conv2_number_of_channels)
+        # activation2.shape = (N, c2)
         hidden = torch.nn.functional.relu(self.fc1(activation2))
         # hidden.shape = (N, h)
-        hidden = self.dropout(hidden)
-        output = self.fc2(hidden)
+
+        #hidden = self.dropout(hidden)
+        #output = self.fc2(hidden)
         # output.shape = (N, 3)
-        return torch.nn.functional.softmax(output, dim=1)
+        #return torch.nn.functional.softmax(output, dim=1)
+
+        regression1 = self.pred1(activation1)
+        regression2 = self.pred2(activation2)
+        regression3 = self.pred3(hidden)
+        return (regression1, regression2, regression3)
+
 
     def ChooseMoveCoordinates(self, authority, position, player):
         legal_move_coordinates = authority.LegalMoveCoordinates(position, player)
         move_to_choice_probability = {}
         other_player = authority.OtherPlayer(player)
         for move_coordinates in legal_move_coordinates:
+            #print ("ConvPredictor.ChooseMoveCoordinates(): move_coordinates = {}".format(move_coordinates))
             resulting_position, winner = authority.MoveWithMoveArrayCoordinates(position, player, move_coordinates)
             if player == 'O':
                 resulting_position = authority.SwapPositions(resulting_position)
@@ -51,9 +96,10 @@ class ConvPredictor(torch.nn.Module, simulation.simulator.Simulator):
             else:
                 resulting_position_tsr = torch.tensor(resulting_position, dtype=torch.float).unsqueeze(0)
                 # print ("ConvPredictor.ChooseMoveCoordinates(): resulting_position_tsr = {}".format(resulting_position_tsr))
-                predictionTsr = self.forward(resulting_position_tsr).squeeze(0)
+                predictionTsr = self.forward(resulting_position_tsr)[2].squeeze(0)
                 expected_value = predictionTsr[0].item() - predictionTsr[2].item()
                 move_to_choice_probability[move_coordinates] = expected_value
+            #print("ConvPredictor.ChooseMoveCoordinates(): expected_value = {}".format(move_to_choice_probability[move_coordinates]))
 
         if self.soft_max_temperature <= 0:  # Hard max
             highest_expected_value = -2.0
@@ -67,10 +113,16 @@ class ConvPredictor(torch.nn.Module, simulation.simulator.Simulator):
         # print("ConvPredictor.ChooseMoveCoordinates(): Before normalization, move_to_choice_probability = \n{}".format(move_to_choice_probability))
         # Normalize
         sum = 0
+        backup_sum = 0  # Sure to be > 0
         for move, expected_value in move_to_choice_probability.items():
-            sum += math.exp(expected_value/self.soft_max_temperature)
-        for move, expected_value in move_to_choice_probability.items():
-            move_to_choice_probability[move] = math.exp(expected_value/self.soft_max_temperature)/sum
+            sum += math.exp(expected_value/self.soft_max_temperature) - 1.0
+            backup_sum +=  math.exp(expected_value/self.soft_max_temperature)
+        if sum > 0:
+            for move, expected_value in move_to_choice_probability.items():
+                move_to_choice_probability[move] = (math.exp(expected_value/self.soft_max_temperature) - 1.0)/sum
+        else:
+            for move, expected_value in move_to_choice_probability.items():
+                move_to_choice_probability[move] = math.exp(expected_value/self.soft_max_temperature)/backup_sum
         #print("ConvPredictor.ChooseMoveCoordinates(): move_to_choice_probability = \n{}".format(move_to_choice_probability))
 
         # Draw a random number

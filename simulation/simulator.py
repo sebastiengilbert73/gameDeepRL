@@ -91,6 +91,54 @@ class Simulator(abc.ABC):
             current_player = authority.OtherPlayer(current_player)
         return positionsList, winner
 
+    def SimulateAsymmetricGameMonteCarlo(self, authority, other_player_simulator,
+                              maximum_number_of_moves, number_of_simulations,
+                              starting_position=None, starting_player=None):
+        if starting_position is None:
+            starting_position = authority.InitialPosition()
+        if starting_player is None:
+            players = authority.PlayersList()
+            starting_player = players[0]
+
+        winner = None
+        number_of_moves = 0
+        position = starting_position
+        current_player = starting_player
+        positionsList = [position]
+        while winner is None and number_of_moves < maximum_number_of_moves:
+            move_coordinates = None
+            if current_player == starting_player:
+                move_coordinates = self.ChooseAMoveMonteCarlo(authority, maximum_number_of_moves,
+                                                              number_of_simulations,
+                                                              position, current_player)
+            else:
+                move_coordinates = other_player_simulator.ChooseAMoveMonteCarlo(authority,
+                                                                                maximum_number_of_moves,
+                                                                                number_of_simulations,
+                                                                                position, current_player)
+            position, winner = authority.MoveWithMoveArrayCoordinates(position, current_player, move_coordinates)
+            number_of_moves += 1
+            positionsList.append(position)
+            current_player = authority.OtherPlayer(current_player)
+        return positionsList, winner
+
+    def ChooseAMoveMonteCarlo(self, authority, maximum_number_of_moves, number_of_simulations,
+                                 starting_position, player):
+        legal_move_to_statistics_list = self.LegalMoveStatistics(authority, maximum_number_of_moves,
+                                                                 number_of_simulations, starting_position,
+                                                                 player)
+        highest_expected_value = -2.0
+        chosen_move_coordinates = None
+        for (move, statistics) in legal_move_to_statistics_list:
+            expected_value = (statistics[0] - statistics[2])/number_of_simulations  # win_rate - loss_rate
+            #print("ChooseAMoveMonteCarlo(): move = {}; statistics = {}".format(move, statistics))
+            if expected_value > highest_expected_value:
+                highest_expected_value = expected_value
+                chosen_move_coordinates = move
+        if chosen_move_coordinates is None:
+            raise ValueError("Authority.ChooseAMoveMonteCarlo(): chosen_move_coordinates is None. legal_move_to_statistics_list = {}".format(legal_move_to_statistics_list))
+        return chosen_move_coordinates
+
 
 
 

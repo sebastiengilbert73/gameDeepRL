@@ -75,9 +75,10 @@ class Authority(rules.authority.GameAuthority):
         return self.MoveWithCoordinates(currentPositionArr, player, dropCoordinatesTuple)
 
     def Display(self, positionArr):
-        if positionArr.shape != self.positionArrayShape:  # (C, D, H, W)
+        """if positionArr.shape != self.positionArrayShape:  # (C, D, H, W)
             raise ValueError("Authority.Display(): The shape of positionArr ({}) is not (2, 1, 3, 3)".format(
                 positionArr.shape))
+        """
         for row in range(3):
             for column in range(3):
                 # occupancy = None
@@ -93,6 +94,7 @@ class Authority(rules.authority.GameAuthority):
                     print('')  # new line
             if row != 2:
                 print('--- --- ---')
+        print("***********")
 
     def RaiseAnErrorIfNoLegalMove(self):
         return True
@@ -171,6 +173,9 @@ class Authority(rules.authority.GameAuthority):
         return dropCoordinates
 
     def MoveWithMoveArrayCoordinates(self, current_position, player, move_array_coordinates):
+        if move_array_coordinates is None:
+            errorMsg = "Authority.MoveWithMoveArrayCoordinates(): move_array_coordinates is None. current_position = {}; player = {}".format(current_position, player)
+            raise ValueError(errorMsg)
         if current_position[move_array_coordinates[0],
                             move_array_coordinates[1],
                             move_array_coordinates[2],

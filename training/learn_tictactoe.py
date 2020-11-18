@@ -19,10 +19,11 @@ parser.add_argument('--learningRate', help='The learning rate. Default: 0.0001',
 parser.add_argument('--weightDecay', help="The weight decay. Default: 0.0001", type=float, default=0.0001)
 parser.add_argument('--numberOfEpochs', help='Number of epochs. Default: 200', type=int, default=200)
 parser.add_argument('--numberOfTrainingPositions', help="The number of positions for training. Default: 1000", type=int, default=1000)
-parser.add_argument('--numberOfValidationPositions', help="The number of positions for validation. Default: 250", type=int, default=250)
 parser.add_argument('--numberOfSimulations', help="The number of simulations per position. Default: 100", type=int, default=100)
 parser.add_argument('--minibatchSize', help='The minibatch size. Default: 16', type=int, default=16)
 parser.add_argument('--outputDirectory', help="The directory where the output data will be written. Default: './'", default='./')
+parser.add_argument('--modelFilepathPrefix', help="The model filepath prefix. Default: './outputs/ConvPredictor_'", default='./outputs/ConvPredictor_')
+parser.add_argument('--faceOffNumberOfSimulations', help="When playing against a random player, the number of simulations per position. Default: 10", type=int, default=10)
 args = parser.parse_args()
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)-15s %(message)s')
@@ -31,6 +32,8 @@ device = 'cpu'
 useCuda = not args.useCpu and torch.cuda.is_available()
 if useCuda:
     device = 'cuda'
+
+number_of_validation_positions = int(0.25 * args.numberOfTrainingPositions)
 
 class PositionStats(Dataset):
     def __init__(self, player_simulator, opponent_simulator, number_of_positions,
@@ -94,7 +97,7 @@ def main():
         soft_max_temperature=0.0
     ).to(device)
 
-    logging.info("Creating training and validation dataset...")
+    logging.info("Creating training and validation datasets...")
     training_dataset = PositionStats(
         player_simulator=player_simulator,
         opponent_simulator=opponent_simulator,
@@ -106,7 +109,7 @@ def main():
     validation_dataset = PositionStats(
         player_simulator=player_simulator,
         opponent_simulator=opponent_simulator,
-        number_of_positions=args.numberOfTrainingPositions,
+        number_of_positions=number_of_validation_positions,
         maximum_number_of_moves=9,
         number_of_simulations=args.numberOfSimulations
     )
@@ -142,13 +145,15 @@ def main():
                 starting_position_tsr, training_target_stats_tsr = starting_position_tsr.to(device), training_target_stats_tsr.to(device)
                 optimizer.zero_grad()
                 prediction_tsr = neural_net(starting_position_tsr)
-
-                loss = lossFcn(prediction_tsr, training_target_stats_tsr)
+                loss_0 = lossFcn(prediction_tsr[0], training_target_stats_tsr)
+                loss_1 = lossFcn(prediction_tsr[1], training_target_stats_tsr)
+                loss_2 = lossFcn(prediction_tsr[2], training_target_stats_tsr)
+                loss = 0.3333 * loss_0 + 0.3333 * loss_1 + 0.3333 * loss_2
                 loss.backward()
                 optimizer.step()
                 loss_sum += loss.item()
             training_loss = loss_sum/training_dataset.__len__()
-            print('\n')
+            print(' ', end='', flush=True)
 
             # Validation
             with torch.no_grad():
@@ -157,16 +162,28 @@ def main():
                 for starting_position_tsr, validation_target_stats_tsr in validation_loader:
                     starting_position_tsr, validation_target_stats_tsr = starting_position_tsr.to(device), validation_target_stats_tsr.to(device)
                     prediction_tsr = neural_net(starting_position_tsr)
-                    loss = lossFcn(prediction_tsr, validation_target_stats_tsr)
+                    loss = lossFcn(prediction_tsr[2], validation_target_stats_tsr)
                     validation_loss_sum += loss.item()
                 validation_loss = validation_loss_sum/validation_dataset.__len__()
-            logging.info("Epoch {}:\ttraining_loss = {}\t\tvalidation_loss = {}".format(epoch, training_loss, validation_loss))
+            if epoch % 50 == 1 or epoch == args.numberOfEpochs:
+                print('\n')
+                logging.info("Epoch {}:   training_loss = {:.6f}   validation_loss = {:.6f}".format(epoch, training_loss, validation_loss))
+        print("")
+        # Play against a random player
+        logging.info("Playing against a random player...")
+        games_list, number_of_wins, number_of_draws, number_of_losses = PlayAgainstRandomPlayer(
+            neural_net, 20, authority
+        )
+        logging.info("Superepoch {}: Against a random player: number_of_wins = {}   number_of_draws = {}   number_of_losses = {}".format(superepoch, number_of_wins, number_of_draws, number_of_losses))
+        #DisplayLostGame(authority, games_list)
 
         # Recompute the datasets
         player_simulator = copy.deepcopy(neural_net)
         player_simulator.SetSoftmaxTemperature(1.0)
-        opponent_simulator = simulation.simulator.RandomSimulator()  # Could be another copy of neural_net, with a different softmax temperature
-        logging.info("Creating training and validation dataset...")
+        #opponent_simulator = simulation.simulator.RandomSimulator()  # Could be another copy of neural_net, with a different softmax temperature
+        opponent_simulator = copy.deepcopy(neural_net)
+        opponent_simulator.SetSoftmaxTemperature(2.0)
+        logging.info("Creating training and validation datasets...")
         training_dataset = PositionStats(
             player_simulator=player_simulator,
             opponent_simulator=opponent_simulator,
@@ -178,13 +195,67 @@ def main():
         validation_dataset = PositionStats(
             player_simulator=player_simulator,
             opponent_simulator=opponent_simulator,
-            number_of_positions=args.numberOfTrainingPositions,
+            number_of_positions=number_of_validation_positions,
             maximum_number_of_moves=9,
             number_of_simulations=args.numberOfSimulations
         )
         logging.info("Finished creating validation dataset")
+        training_loader = torch.utils.data.DataLoader(training_dataset, batch_size=args.minibatchSize,
+                                                      shuffle=True, num_workers=2)
+        validation_loader = torch.utils.data.DataLoader(validation_dataset, batch_size=args.minibatchSize,
+                                                        shuffle=True, num_workers=2)
+
+        model_filepath = args.modelFilepathPrefix + str(args.conv1NumberOfChannels) + '_' + str(args.conv2NumberOfChannels) + '_' + str(args.hiddenSize) + '_' + args.dropoutRatio + '_' + str(superepoch) + '.pth'
+        torch.save(neural_net.state_dict(), model_filepath)
 
 
+def PlayAgainstRandomPlayer(player_simulator, number_of_games, authority):
+    number_of_wins = 0
+    number_of_draws = 0
+    number_of_losses = 0
+    games_list = []
+    random_simulator = simulation.simulator.RandomSimulator()
+    for gameNdx in range(number_of_games):
+        positionsList = None
+        winner = None
+        if gameNdx % 2 == 0:
+            positionsList, winner = player_simulator.SimulateAsymmetricGameMonteCarlo(
+                authority=authority,
+                other_player_simulator=random_simulator,
+                maximum_number_of_moves=9,
+                number_of_simulations=args.faceOffNumberOfSimulations,
+                starting_position=None,
+                starting_player='X'
+            )
+        else:
+            positionsList, winner = random_simulator.SimulateAsymmetricGameMonteCarlo(
+                authority=authority,
+                other_player_simulator=player_simulator,
+                maximum_number_of_moves=9,
+                number_of_simulations=args.faceOffNumberOfSimulations,
+                starting_position=None,
+                starting_player='O'
+            )
+        games_list.append((positionsList, winner))
+        display_character = '-'
+        if winner == 'X':
+            number_of_wins += 1
+            display_character = 'X'
+        elif winner == 'O':
+            number_of_losses += 1
+            display_character = 'O'
+        else:
+            number_of_draws += 1
+        print('{}'.format(display_character), end='', flush=True)
+    print()
+    return games_list, number_of_wins, number_of_draws, number_of_losses
+
+def DisplayLostGame(authority, games_list):
+    for game in games_list:
+        if game[1] == 'O':
+            logging.info("Lost game:")
+            authority.DisplayGame(game[0])
+            break
 
 if __name__ == '__main__':
     main()
