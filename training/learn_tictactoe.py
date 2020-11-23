@@ -21,7 +21,7 @@ parser.add_argument('--numberOfEpochs', help='Number of epochs. Default: 200', t
 parser.add_argument('--numberOfTrainingPositions', help="The number of positions for training. Default: 1000", type=int, default=1000)
 parser.add_argument('--numberOfSimulations', help="The number of simulations per position. Default: 100", type=int, default=100)
 parser.add_argument('--minibatchSize', help='The minibatch size. Default: 16', type=int, default=16)
-parser.add_argument('--outputDirectory', help="The directory where the output data will be written. Default: './'", default='./')
+parser.add_argument('--outputDirectory', help="The directory where the output data will be written. Default: './outputs'", default='./outputs')
 parser.add_argument('--modelFilepathPrefix', help="The model filepath prefix. Default: './outputs/ConvPredictor_'", default='./outputs/ConvPredictor_')
 parser.add_argument('--faceOffNumberOfSimulations', help="When playing against a random player, the number of simulations per position. Default: 10", type=int, default=10)
 args = parser.parse_args()
@@ -44,10 +44,13 @@ class PositionStats(Dataset):
         self.position_stats_pairs = []
         self.authority = rules.tictactoe.Authority()
         self.maximum_number_of_moves = maximum_number_of_moves
+        random_player = simulation.simulator.RandomSimulator()
+        authority = rules.tictactoe.Authority()
         for positionNdx in range(number_of_positions):
             # Generate a game
-            positionsList, winner = self.player_simulator.SimulateAsymmetricGame(
-                self.authority, self.opponent_simulator, self.maximum_number_of_moves)
+            #positionsList, winner = self.player_simulator.SimulateAsymmetricGame(
+            #    self.authority, self.opponent_simulator, self.maximum_number_of_moves)
+            positionsList, winner = random_player.SimulateGame(authority, maximum_number_of_moves)
             # Select a position from the list
             startNdx = random.randint(0, len(positionsList) - 2)
 
@@ -94,7 +97,8 @@ def main():
         conv2_number_of_channels=args.conv2NumberOfChannels,
         hidden_size=args.hiddenSize,
         dropout_ratio=args.dropoutRatio,
-        soft_max_temperature=0.0
+        final_decision_softmax_temperature=0.0,
+        simulation_softmax_temperature=1.0
     ).to(device)
 
     logging.info("Creating training and validation datasets...")
@@ -132,8 +136,8 @@ def main():
     epochLossFile = open(os.path.join(args.outputDirectory, 'epochLoss.csv'), "w",
                          buffering=1)  # Flush the buffer at each line
     epochLossFile.write("epoch,trainingLoss,validationLoss\n")
-
-    for superepoch in range(1, 10):
+    number_of_superepochs = 10
+    for superepoch in range(1, number_of_superepochs + 1):
         logging.info ("****** Superepoch {} ******".format(superepoch))
         for epoch in range(1, args.numberOfEpochs + 1):
             #print ("epoch {}".format(epoch))
@@ -168,10 +172,13 @@ def main():
             if epoch % 50 == 1 or epoch == args.numberOfEpochs:
                 print('\n')
                 logging.info("Epoch {}:   training_loss = {:.6f}   validation_loss = {:.6f}".format(epoch, training_loss, validation_loss))
+            epochLossFile.write("{},{},{}\n".format((superepoch - 1) * args.numberOfEpochs + (epoch - 1), training_loss, validation_loss))
         print("")
+
+
         # Play against a random player
         logging.info("Playing against a random player...")
-        neural_net.SetSoftmaxTemperature(1.0)
+        #neural_net.SetSoftmaxTemperature(1.0)
         games_list, number_of_wins, number_of_draws, number_of_losses = PlayAgainstRandomPlayer(
             neural_net, 20, authority
         )
@@ -180,11 +187,12 @@ def main():
 
         # Recompute the datasets
         player_simulator = copy.deepcopy(neural_net)
-        player_simulator.SetSoftmaxTemperature(2.0)
+        #player_simulator.SetSoftmaxTemperature(2.0)
         #opponent_simulator = simulation.simulator.RandomSimulator()  # Could be another copy of neural_net, with a different softmax temperature
         opponent_simulator = copy.deepcopy(neural_net)
-        opponent_simulator.SetSoftmaxTemperature(1.0)
-        logging.info("Creating training and validation datasets...")
+        opponent_simulation_softmax_temperature = 0.3 * (number_of_superepochs - superepoch) + 1.0
+        opponent_simulator.SetSimulationSoftmaxTemperature(opponent_simulation_softmax_temperature)
+        logging.info("Creating training and validation datasets... opponent_simulation_softmax_temperature = {}".format(opponent_simulation_softmax_temperature))
         training_dataset = PositionStats(
             player_simulator=player_simulator,
             opponent_simulator=opponent_simulator,

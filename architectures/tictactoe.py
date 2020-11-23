@@ -36,7 +36,7 @@ class AuxiliaryRegressorLinear(torch.nn.Module):
 
 class ConvPredictor(torch.nn.Module, simulation.simulator.Simulator):
     def __init__(self, conv1_number_of_channels, conv2_number_of_channels,
-                 hidden_size, dropout_ratio=0.5, soft_max_temperature=0.0):
+                 hidden_size, dropout_ratio=0.5, final_decision_softmax_temperature=0.0, simulation_softmax_temperature=1.0):
         super(ConvPredictor, self).__init__()
         self.conv1 = torch.nn.Conv3d(2, conv1_number_of_channels, (1, 2, 2))
         self.conv2 = torch.nn.Conv3d(conv1_number_of_channels, conv2_number_of_channels, (1, 2, 2))
@@ -52,7 +52,8 @@ class ConvPredictor(torch.nn.Module, simulation.simulator.Simulator):
         self.pred2 = AuxiliaryRegressorLinear(self.conv2_number_of_channels, 3, dropout_ratio)
         self.pred3 = AuxiliaryRegressorLinear(self.hidden_size, 3, dropout_ratio)
 
-        self.soft_max_temperature = soft_max_temperature
+        self.final_decision_softmax_temperature = final_decision_softmax_temperature
+        self.simulation_softmax_temperature = simulation_softmax_temperature
 
     def forward(self, x):
         # x.shape = (N, 2, 1, 3, 3)
@@ -77,7 +78,7 @@ class ConvPredictor(torch.nn.Module, simulation.simulator.Simulator):
         return (regression1, regression2, regression3)
 
 
-    def ChooseMoveCoordinates(self, authority, position, player):
+    def ChooseMoveCoordinatesQuick(self, authority, position, player):
         legal_move_coordinates = authority.LegalMoveCoordinates(position, player)
         move_to_choice_probability = {}
         other_player = authority.OtherPlayer(player)
@@ -101,7 +102,9 @@ class ConvPredictor(torch.nn.Module, simulation.simulator.Simulator):
                 move_to_choice_probability[move_coordinates] = expected_value
             #print("ConvPredictor.ChooseMoveCoordinates(): expected_value = {}".format(move_to_choice_probability[move_coordinates]))
 
-        if self.soft_max_temperature <= 0:  # Hard max
+        softmax_temperature = self.simulation_softmax_temperature  # Quick decision
+
+        if softmax_temperature <= 0:  # Hard max
             highest_expected_value = -2.0
             chosen_move_coordinates = None
             for move, expected_value in move_to_choice_probability.items():
@@ -115,14 +118,14 @@ class ConvPredictor(torch.nn.Module, simulation.simulator.Simulator):
         sum = 0
         backup_sum = 0  # Sure to be > 0
         for move, expected_value in move_to_choice_probability.items():
-            sum += math.exp(expected_value/self.soft_max_temperature) - 1.0
-            backup_sum +=  math.exp(expected_value/self.soft_max_temperature)
+            sum += math.exp(expected_value/softmax_temperature) - 1.0
+            backup_sum +=  math.exp(expected_value/softmax_temperature)
         if sum > 0:
             for move, expected_value in move_to_choice_probability.items():
-                move_to_choice_probability[move] = (math.exp(expected_value/self.soft_max_temperature) - 1.0)/sum
+                move_to_choice_probability[move] = (math.exp(expected_value/softmax_temperature) - 1.0)/sum
         else:
             for move, expected_value in move_to_choice_probability.items():
-                move_to_choice_probability[move] = math.exp(expected_value/self.soft_max_temperature)/backup_sum
+                move_to_choice_probability[move] = math.exp(expected_value/softmax_temperature)/backup_sum
         #print("ConvPredictor.ChooseMoveCoordinates(): move_to_choice_probability = \n{}".format(move_to_choice_probability))
 
         # Draw a random number
@@ -134,5 +137,7 @@ class ConvPredictor(torch.nn.Module, simulation.simulator.Simulator):
                 return move
         raise RuntimeError("ConvPredictor.ChooseMoveCoordinates(): Summed the probabilities without reaching the random number {}".format(random_draw))
 
-    def SetSoftmaxTemperature(self, temperature):
-        self.soft_max_temperature = temperature
+
+
+    def SetSimulationSoftmaxTemperature(self, temperature):
+        self.simulation_softmax_temperature = temperature
