@@ -47,9 +47,10 @@ class GameAuthority(abc.ABC):
     def PlayersList(self):
         pass
 
-    @abc.abstractmethod
+    """@abc.abstractmethod
     def MoveWithString(self, currentPositionArr, player, dropCoordinatesAsString):
         pass # return (positionArr, winner)
+    """
 
     @abc.abstractmethod
     def Display(self, positionArr):
