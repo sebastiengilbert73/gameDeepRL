@@ -94,11 +94,11 @@ class Simulator(abc.ABC):
             position_after_candidate_move, winner = authority.MoveWithMoveArrayCoordinates(
                 starting_position, player, move_coordinates)
             if winner == player:
-                legal_move_to_statistics_list.append((move_coordinates, (1.0, 0, 0)))
+                legal_move_to_statistics_list.append((move_coordinates, (number_of_simulations, 0, 0)))
             elif winner == other_player:
-                legal_move_to_statistics_list.append((move_coordinates, (0, 0, 1.0)))
+                legal_move_to_statistics_list.append((move_coordinates, (0, 0, number_of_simulations)))
             elif winner == 'draw':
-                legal_move_to_statistics_list.append((move_coordinates, (0, 1.0, 0)))
+                legal_move_to_statistics_list.append((move_coordinates, (0, number_of_simulations, 0)))
             else: # None: The game is not finished
                 for simulationNdx in range(number_of_simulations):
                     positionsList, winner = self.SimulateGame(authority, maximum_number_of_moves,
