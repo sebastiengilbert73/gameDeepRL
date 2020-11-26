@@ -33,7 +33,7 @@ useCuda = not args.useCpu and torch.cuda.is_available()
 if useCuda:
     device = 'cuda'
 
-number_of_validation_positions = int(0.25 * args.numberOfTrainingPositions)
+
 
 class PositionStats(Dataset):
     def __init__(self, player_simulator, opponent_simulator, number_of_positions,
@@ -110,6 +110,7 @@ def main():
         number_of_simulations=args.numberOfSimulations
     )
     logging.info("Finished creating training dataset")
+    number_of_validation_positions = int(0.25 * args.numberOfTrainingPositions)
     validation_dataset = PositionStats(
         player_simulator=player_simulator,
         opponent_simulator=opponent_simulator,
@@ -139,6 +140,7 @@ def main():
     number_of_superepochs = 10
     for superepoch in range(1, number_of_superepochs + 1):
         logging.info ("****** Superepoch {} ******".format(superepoch))
+        lowest_validation_loss = 1.0e9
         for epoch in range(1, args.numberOfEpochs + 1):
             #print ("epoch {}".format(epoch))
             # Set the neural network to training mode
@@ -169,6 +171,13 @@ def main():
                     loss = lossFcn(prediction_tsr[2], validation_target_stats_tsr)
                     validation_loss_sum += loss.item()
                 validation_loss = validation_loss_sum/validation_dataset.__len__()
+                if superepoch == number_of_superepochs and validation_loss < lowest_validation_loss:
+                    lowest_validation_loss = validation_loss
+                    model_filepath = args.modelFilepathPrefix + str(args.conv1NumberOfChannels) + '_' + str(
+                        args.conv2NumberOfChannels) + '_' + str(args.hiddenSize) + '_' + str(
+                        args.dropoutRatio) + '_' + str(superepoch) + '_' + "{:.4f}".format(validation_loss) + '.pth'
+                    torch.save(neural_net.state_dict(), model_filepath)
+
             if epoch % 50 == 1 or epoch == args.numberOfEpochs:
                 print('\n')
                 logging.info("Epoch {}:   training_loss = {:.6f}   validation_loss = {:.6f}".format(epoch, training_loss, validation_loss))
@@ -193,10 +202,14 @@ def main():
         opponent_simulation_softmax_temperature = 0.3 * (number_of_superepochs - superepoch) + 1.0
         opponent_simulator.SetSimulationSoftmaxTemperature(opponent_simulation_softmax_temperature)
         logging.info("Creating training and validation datasets... opponent_simulation_softmax_temperature = {}".format(opponent_simulation_softmax_temperature))
+        number_of_training_positions = args.numberOfTrainingPositions
+        if superepoch == number_of_superepochs:
+            number_of_training_positions = 10 * args.numberOfTrainingPositions
+        number_of_validation_positions = int(0.25 * number_of_training_positions)
         training_dataset = PositionStats(
             player_simulator=player_simulator,
             opponent_simulator=opponent_simulator,
-            number_of_positions=args.numberOfTrainingPositions,
+            number_of_positions=number_of_training_positions,
             maximum_number_of_moves=9,
             number_of_simulations=args.numberOfSimulations
         )
