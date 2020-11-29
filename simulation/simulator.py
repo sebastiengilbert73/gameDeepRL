@@ -18,17 +18,19 @@ class Simulator(abc.ABC):
                                                                  player)
         if self.final_decision_softmax_temperature <= 0:  # Hard max
             highest_expected_value = -2.0
-            chosen_move_coordinates = None
+            chosen_move_coordinates = []
             for (move, stats) in legal_move_to_statistics_list:
                 expected_value = (stats[0] - stats[2])/(stats[0] + stats[1] + stats[2])
                 if expected_value > highest_expected_value:
                     highest_expected_value = expected_value
-                    chosen_move_coordinates = move
-            if chosen_move_coordinates is None:
+                    chosen_move_coordinates = [move]
+                elif expected_value == highest_expected_value:
+                    chosen_move_coordinates.append(move)
+            if len(chosen_move_coordinates) == 0:
                 raise ValueError(
-                    "Simulator.ChooseMoveCoordinatesMonteCarlo(): chosen_move_coordinates is None. legal_move_to_statistics_list = {}".format(
+                    "Simulator.ChooseMoveCoordinatesMonteCarlo(): chosen_move_coordinates is empty. legal_move_to_statistics_list = {}".format(
                         legal_move_to_statistics_list))
-            return chosen_move_coordinates
+            return random.choice(chosen_move_coordinates)
 
         # Softmax
         move_to_expected_value_dic = {move: (stats[0] - stats[2])/(stats[0] + stats[1] + stats[2]) for (move, stats) in legal_move_to_statistics_list}
