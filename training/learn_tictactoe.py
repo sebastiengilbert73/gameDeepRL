@@ -92,10 +92,10 @@ def main():
     player_simulator = simulation.simulator.RandomSimulator()
 
     # Create a neural network
-    neural_net = arch.ConvPredictor(
+    neural_net = arch.ConvPredictorDirect(
         conv1_number_of_channels=args.conv1NumberOfChannels,
         conv2_number_of_channels=args.conv2NumberOfChannels,
-        hidden_size=args.hiddenSize,
+        #hidden_size=args.hiddenSize,
         dropout_ratio=args.dropoutRatio,
         final_decision_softmax_temperature=0.0,
         simulation_softmax_temperature=1.0
@@ -153,8 +153,8 @@ def main():
                 prediction_tsr = neural_net(starting_position_tsr)
                 loss_0 = lossFcn(prediction_tsr[0], training_target_stats_tsr)
                 loss_1 = lossFcn(prediction_tsr[1], training_target_stats_tsr)
-                loss_2 = lossFcn(prediction_tsr[2], training_target_stats_tsr)
-                loss = 0.3333 * loss_0 + 0.3333 * loss_1 + 0.3333 * loss_2
+                #loss_2 = lossFcn(prediction_tsr[2], training_target_stats_tsr)
+                loss = 0.3333 * loss_0 + 0.3333 * loss_1 #+ 0.3333 * loss_2
                 loss.backward()
                 optimizer.step()
                 loss_sum += loss.item()
@@ -168,7 +168,8 @@ def main():
                 for starting_position_tsr, validation_target_stats_tsr in validation_loader:
                     starting_position_tsr, validation_target_stats_tsr = starting_position_tsr.to(device), validation_target_stats_tsr.to(device)
                     prediction_tsr = neural_net(starting_position_tsr)
-                    loss = lossFcn(prediction_tsr[2], validation_target_stats_tsr)
+                    #loss = lossFcn(prediction_tsr[2], validation_target_stats_tsr)
+                    loss = lossFcn(prediction_tsr[1], validation_target_stats_tsr)
                     validation_loss_sum += loss.item()
                 validation_loss = validation_loss_sum/validation_dataset.__len__()
                 if superepoch == number_of_superepochs and validation_loss < lowest_validation_loss:
@@ -203,7 +204,7 @@ def main():
         opponent_simulator.SetSimulationSoftmaxTemperature(opponent_simulation_softmax_temperature)
         logging.info("Creating training and validation datasets... opponent_simulation_softmax_temperature = {}".format(opponent_simulation_softmax_temperature))
         number_of_training_positions = args.numberOfTrainingPositions
-        if superepoch == number_of_superepochs:
+        if superepoch == number_of_superepochs - 1:
             number_of_training_positions = 10 * args.numberOfTrainingPositions
         number_of_validation_positions = int(0.25 * number_of_training_positions)
         training_dataset = PositionStats(
