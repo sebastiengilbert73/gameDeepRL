@@ -92,7 +92,7 @@ def main():
     player_simulator = simulation.simulator.RandomSimulator()
 
     # Create a neural network
-    neural_net = arch.ConvPredictorDirect(
+    """neural_net = arch.ConvPredictorDirect(
         conv1_number_of_channels=args.conv1NumberOfChannels,
         conv2_number_of_channels=args.conv2NumberOfChannels,
         #hidden_size=args.hiddenSize,
@@ -100,6 +100,15 @@ def main():
         final_decision_softmax_temperature=0.0,
         simulation_softmax_temperature=1.0
     ).to(device)
+    """
+    neural_net = arch.ConvPredictor2Scales(
+        conv1a_number_of_channels=args.conv1NumberOfChannels,
+        conv2a_number_of_channels=args.conv2NumberOfChannels,
+        conv1b_number_of_channels=16,
+        dropout_ratio=0.5,
+        final_decision_softmax_temperature=0.0,
+        simulation_softmax_temperature=1.0
+    )
 
     logging.info("Creating training and validation datasets...")
     training_dataset = PositionStats(
@@ -151,10 +160,11 @@ def main():
                 starting_position_tsr, training_target_stats_tsr = starting_position_tsr.to(device), training_target_stats_tsr.to(device)
                 optimizer.zero_grad()
                 prediction_tsr = neural_net(starting_position_tsr)
-                loss_0 = lossFcn(prediction_tsr[0], training_target_stats_tsr)
-                loss_1 = lossFcn(prediction_tsr[1], training_target_stats_tsr)
+                losses_list = [lossFcn(prediction_tsr[index], training_target_stats_tsr) for index in range(len(prediction_tsr))]
+                #loss_0 = lossFcn(prediction_tsr[0], training_target_stats_tsr)
+                #loss_1 = lossFcn(prediction_tsr[1], training_target_stats_tsr)
                 #loss_2 = lossFcn(prediction_tsr[2], training_target_stats_tsr)
-                loss = 0.5 * loss_0 + 0.5 * loss_1
+                loss = sum(losses_list)/len(losses_list)
                 loss.backward()
                 optimizer.step()
                 loss_sum += loss.item()
@@ -168,9 +178,12 @@ def main():
                 for starting_position_tsr, validation_target_stats_tsr in validation_loader:
                     starting_position_tsr, validation_target_stats_tsr = starting_position_tsr.to(device), validation_target_stats_tsr.to(device)
                     prediction_tsr = neural_net(starting_position_tsr)
-                    loss_0 = lossFcn(prediction_tsr[0], validation_target_stats_tsr)
-                    loss_1 = lossFcn(prediction_tsr[1], validation_target_stats_tsr)
-                    loss = 0.5 * loss_0 + 0.5 * loss_1
+                    losses_list = [lossFcn(prediction_tsr[index], validation_target_stats_tsr) for index in
+                                   range(len(prediction_tsr))]
+                    #loss_0 = lossFcn(prediction_tsr[0], validation_target_stats_tsr)
+                    #loss_1 = lossFcn(prediction_tsr[1], validation_target_stats_tsr)
+                    #loss = 0.5 * loss_0 + 0.5 * loss_1
+                    loss = sum(losses_list)/len(losses_list)
                     validation_loss_sum += loss.item()
                 validation_loss = validation_loss_sum/validation_dataset.__len__()
                 if superepoch == number_of_superepochs and validation_loss < lowest_validation_loss:
@@ -198,10 +211,10 @@ def main():
 
         # Recompute the datasets
         player_simulator = copy.deepcopy(neural_net)
-        #player_simulator.SetSoftmaxTemperature(2.0)
+        player_simulator.SetSimulationSoftmaxTemperature(0.8)
         #opponent_simulator = simulation.simulator.RandomSimulator()  # Could be another copy of neural_net, with a different softmax temperature
         opponent_simulator = copy.deepcopy(neural_net)
-        opponent_simulation_softmax_temperature = 0.3 * (number_of_superepochs - superepoch) + 1.0
+        opponent_simulation_softmax_temperature = 1.6  #0.3 * (number_of_superepochs - superepoch) + 1.0
         opponent_simulator.SetSimulationSoftmaxTemperature(opponent_simulation_softmax_temperature)
         logging.info("Creating training and validation datasets... opponent_simulation_softmax_temperature = {}".format(opponent_simulation_softmax_temperature))
         number_of_training_positions = args.numberOfTrainingPositions
