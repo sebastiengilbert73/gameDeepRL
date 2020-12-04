@@ -224,3 +224,104 @@ class ConvPredictorDirect(torch.nn.Module, simulation.simulator.Simulator):
 
     def SetSimulationSoftmaxTemperature(self, temperature):
         self.simulation_softmax_temperature = temperature
+
+
+class ConvPredictor2Scales(torch.nn.Module, simulation.simulator.Simulator):
+    def __init__(self, conv1a_number_of_channels, conv2a_number_of_channels, conv1b_number_of_channels,
+                 dropout_ratio=0.5, final_decision_softmax_temperature=0.0, simulation_softmax_temperature=1.0):
+        super(ConvPredictor2Scales, self).__init__()
+        self.conv1a = torch.nn.Conv3d(2, conv1a_number_of_channels, (1, 3, 3))
+        self.conv2a = torch.nn.Conv3d(conv1a_number_of_channels, conv2a_number_of_channels, (1, 3, 3))
+        self.conv1b = torch.nn.Conv3d(2, conv1b_number_of_channels, (1, 3, 3), dilation=2)
+        self.dropout3d = torch.nn.Dropout3d(p=dropout_ratio)
+        self.dropout = torch.nn.Dropout(p=dropout_ratio)
+        self.conv1a_number_of_channels = conv1a_number_of_channels
+        self.conv2a_number_of_channels = conv2a_number_of_channels
+        self.conv1b_number_of_channels = conv1b_number_of_channels
+        self.flattened_activation_size = self.conv2a_number_of_channels * 2 * 3 + self.conv1b_number_of_channels * 2 * 3
+
+
+        self.pred1a = AuxiliaryRegressorConv((self.conv1a_number_of_channels, 1, 4, 5), 3, dropout_ratio)
+        self.pred2a = AuxiliaryRegressorConv((self.conv2a_number_of_channels, 1, 2, 3), 3, dropout_ratio)
+        self.pred1b = AuxiliaryRegressorConv((self.conv1b_number_of_channels, 1, 2, 3), 3, dropout_ratio)
+        self.pred_flattened = AuxiliaryRegressorLinear(self.flattened_activation_size, 3, dropout_ratio)
+
+        self.final_decision_softmax_temperature = final_decision_softmax_temperature
+        self.simulation_softmax_temperature = simulation_softmax_temperature
+
+    def forward(self, x):
+        # x.shape = (N, 2, 1, 3, 3)
+        activation1a = torch.nn.functional.relu(self.conv1a(x))
+        # activation1a.shape = (N, c1a, 1, 4, 5)
+        activation1a = self.dropout3d(activation1a)
+        activation2a = torch.nn.functional.relu(self.conv2a(activation1a))
+        # activation2a.shape = (N, c2a, 1, 2, 3)
+
+        activation1b = torch.nn.functional.relu(self.conv1b(x))
+        # activation1b.shape = (N, c1b, 2, 3)
+
+        flattened_activation_2a = activation2a.view(-1, self.conv2a_number_of_channels * 2 * 3)
+        flattened_activation_1b = activation1b.view(-1, self.conv1b_number_of_channels * 2 * 3)
+        flattened_activation = torch.cat([flattened_activation_2a, flattened_activation_1b], dim=1)
+
+
+        regression1a = self.pred1a(activation1a)
+        regression2a = self.pred2a(activation2a)
+        regression1b = self.pred1b(activation1b)
+        regression_flattened = self.pred_flattened(flattened_activation)
+
+        return (regression1a, regression2a, regression1b, regression_flattened)
+
+    def ChooseMoveCoordinatesQuick(self, authority, position, player):
+        legal_move_coordinates = authority.LegalMoveCoordinates(position, player)
+        move_to_choice_probability = {}
+        other_player = authority.OtherPlayer(player)
+        for move_coordinates in legal_move_coordinates:
+            resulting_position, winner = authority.MoveWithMoveArrayCoordinates(position, player, move_coordinates)
+            if player == 'red':
+                resulting_position = authority.SwapPositions(resulting_position)
+            move_coordinates = tuple(move_coordinates)  # To make it hashable
+            if winner == player:
+                return move_coordinates
+            elif winner == other_player:
+                move_to_choice_probability[move_coordinates] = -1
+            elif winner == 'draw':
+                move_to_choice_probability[move_coordinates] = 0
+            else:
+                resulting_position_tsr = torch.tensor(resulting_position, dtype=torch.float).unsqueeze(0)
+                predictionTsr = self.forward(resulting_position_tsr)[-1].squeeze(0)
+                expected_value = predictionTsr[0].item() - predictionTsr[2].item()
+                move_to_choice_probability[move_coordinates] = expected_value
+
+        softmax_temperature = self.simulation_softmax_temperature  # Quick decision
+
+        if softmax_temperature <= 0:  # Hard max
+            highest_expected_value = -2.0
+            chosen_move_coordinates = []
+            for move, expected_value in move_to_choice_probability.items():
+                if expected_value > highest_expected_value:
+                    highest_expected_value = expected_value
+                    chosen_move_coordinates = [move]
+                elif expected_value == highest_expected_value:
+                    chosen_move_coordinates.append(move)
+            return random.choice(chosen_move_coordinates)
+
+        # Normalize
+        sum = 0
+        for move, expected_value in move_to_choice_probability.items():
+            sum += math.exp(expected_value/softmax_temperature)
+
+        for move, expected_value in move_to_choice_probability.items():
+            move_to_choice_probability[move] = (math.exp(expected_value/softmax_temperature) )/sum
+
+        # Draw a random number
+        random_draw = random.random()
+        running_sum = 0
+        for move, probability in move_to_choice_probability.items():
+            running_sum += probability
+            if running_sum >= random_draw:
+                return move
+        raise RuntimeError("ConvPredictor2Scales.ChooseMoveCoordinates(): Summed the probabilities without reaching the random number {}".format(random_draw))
+
+    def SetSimulationSoftmaxTemperature(self, temperature):
+        self.simulation_softmax_temperature = temperature
